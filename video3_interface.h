@@ -16,7 +16,7 @@
 /*
  * define
  */
-#define		SERVER_VIDEO3_VERSION_STRING		"alpha-1.0"
+#define		SERVER_VIDEO3_VERSION_STRING		"alpha-1.1"
 
 #define		MSG_VIDEO3_BASE						(SERVER_VIDEO3<<16)
 #define		MSG_VIDEO3_SIGINT					(MSG_VIDEO3_BASE | 0x0000)

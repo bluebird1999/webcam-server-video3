@@ -70,6 +70,7 @@ static config_map_t video3_config_spd_map[] = {
     {"cloud_report",	&(video3_config.spd.cloud_report),			cfg_u32, 1,0,0,1,},
     {"alarm_interval", 	&(video3_config.spd.alarm_interval), 		cfg_u32, 1,0,1,30,},
 	{"recording_length",&(video3_config.spd.recording_length),		cfg_u32, 6,0,0,30,},
+	{"mt_enable",		&(video3_config.spd.mt_enable),				cfg_u32, 1,0,0,1,},
     {"file_path",		&(video3_config.spd.file_path), 			cfg_string, '/opt/qcy/data/',0, 0,64,},
     {NULL,},
 };

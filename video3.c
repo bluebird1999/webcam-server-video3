@@ -312,7 +312,7 @@ static void *video3_spd_func(void *arg)
     pthread_detach(pthread_self());
     //init
     memcpy( &ctrl, (video3_spd_config_t*)arg, sizeof(video3_spd_config_t) );
-    ret = video3_spd_init( &ctrl, &md_src, &pd_src);
+    ret = video3_spd_init( &ctrl, stream.isp, &md_src, &pd_src);
     if( ret ) {
     	log_qcy(DEBUG_INFO, "video3 human detection thread init failed!");
     	goto exit;
@@ -335,7 +335,7 @@ static void *video3_spd_func(void *arg)
     	usleep(1000*1000 / config.profile.profile.video.denominator);	//
     }
     //release
-    video3_spd_release();
+    video3_spd_release(stream.isp);
     misc_set_bit(&info.thread_start, THREAD_SPD, 0 );
 exit:
     manager_common_send_dummy(SERVER_VIDEO3);
@@ -366,7 +366,6 @@ static int stream_destroy(void)
 static int stream_start(void)
 {
 	int ret=0;
-	pthread_t osd_id, main_id;
 	if( stream.isp != -1 ) {
 		ret = rts_av_enable_chn(stream.isp);
 		if (ret) {
@@ -387,19 +386,20 @@ static int stream_start(void)
 	else {
 		return -1;
 	}
-    ret = rts_av_start_recv(stream.isp);
+/*    ret = rts_av_start_recv(stream.isp);
     if (ret) {
     	log_qcy(DEBUG_SERIOUS, "start recv isp fail, ret = %d", ret);
     	return -1;
     }
+*/
     return 0;
 }
 
 static int stream_stop(void)
 {
 	int ret=0;
-	if(stream.isp!=-1)
-		ret = rts_av_stop_recv(stream.isp);
+//	if(stream.isp!=-1)
+//		ret = rts_av_stop_recv(stream.isp);
 	if(stream.jpg!=-1)
 		ret = rts_av_disable_chn(stream.jpg);
 	if(stream.isp!=-1)
@@ -425,25 +425,33 @@ static int md_check_scheduler(void)
 	if( config.md.enable ) {
 		ret = video3_md_check_scheduler_time(&md_run.scheduler, &md_run.mode);
 		if( ret==1 ) {
-			if( !md_run.started && !misc_get_bit(info.thread_start, THREAD_MD) &&
-					!misc_get_bit(info.thread_start, THREAD_SPD) ) {
+			if( !md_run.started ) {
 				//start the md thread
-				ret = pthread_create(&md_id, NULL, video3_md_func, (void*)&config.md);
-				config.spd.alarm_interval = config.md.alarm_interval;
-				config.spd.cloud_report = config.md.cloud_report;
-				config.spd.enable = config.md.enable;
-				config.spd.recording_length = config.md.recording_length;
-				config.spd.width = config.profile.profile.video.width;
-				config.spd.height = config.profile.profile.video.height;
-				ret |= pthread_create(&spd_id, NULL, video3_spd_func, (void*)&config.spd);
+				if( !misc_get_bit(info.thread_start, THREAD_MD) ) {
+//					ret = pthread_create(&md_id, NULL, video3_md_func, (void*)&config.md);
+				}
+				ret = 0;
+				if( config.spd.enable ) {
+					config.spd.alarm_interval = config.md.alarm_interval;
+					config.spd.cloud_report = config.md.cloud_report;
+					config.spd.enable = config.md.enable;
+					config.spd.recording_length = config.md.recording_length;
+					config.spd.width = config.profile.profile.video.width;
+					config.spd.height = config.profile.profile.video.height;
+					if( !misc_get_bit(info.thread_start, THREAD_SPD) ) {
+						ret |= pthread_create(&spd_id, NULL, video3_spd_func, (void*)&config.spd);
+					}
+				}
 				if(ret != 0) {
 					misc_set_bit( &info.thread_exit, THREAD_MD, 1);
-					misc_set_bit( &info.thread_exit, THREAD_SPD, 1);
-					log_qcy(DEBUG_SERIOUS, "md or spd thread create error! ret = %d",ret);
+					if( config.spd.enable ) {
+						misc_set_bit( &info.thread_exit, THREAD_SPD, 1);
+					}
+					log_qcy(DEBUG_SERIOUS, "spd thread create error! ret = %d",ret);
 					return -1;
 				}
 				else {
-					log_qcy(DEBUG_INFO, "md and spd thread create successful!");
+					log_qcy(DEBUG_INFO, "spd thread create successful!");
 					md_run.started = 1;
 				    /********message body********/
 					msg_init(&msg);
@@ -451,8 +459,11 @@ static int md_check_scheduler(void)
 					msg.sender = msg.receiver = SERVER_VIDEO3;
 					msg.arg_in.wolf = VIDEO3_RUN_MODE_MD_HARD;
 				    manager_common_send_message(SERVER_VIDEO3, &msg);
-					msg.arg_in.wolf = VIDEO3_RUN_MODE_SPD;
-				    manager_common_send_message(SERVER_VIDEO3, &msg);
+				    if( config.spd.enable ) {
+				    	log_qcy(DEBUG_INFO, "spd thread create successful!");
+						msg.arg_in.wolf = VIDEO3_RUN_MODE_SPD;
+						manager_common_send_message(SERVER_VIDEO3, &msg);
+				    }
 					/****************************/
 				}
 			}
@@ -476,15 +487,17 @@ static int md_check_scheduler(void)
 stop_md:
 	md_run.started = 0;
 	misc_set_bit( &info.thread_exit, THREAD_MD, 1);
-	misc_set_bit( &info.thread_exit, THREAD_SPD, 1);
 	/********message body********/
 	msg_init(&msg);
 	msg.message = MSG_VIDEO3_STOP;
 	msg.sender = msg.receiver = SERVER_VIDEO3;
 	msg.arg_in.wolf = VIDEO3_RUN_MODE_MD_HARD;
 	manager_common_send_message(SERVER_VIDEO3, &msg);
-	msg.arg_in.wolf = VIDEO3_RUN_MODE_SPD;
-	manager_common_send_message(SERVER_VIDEO3, &msg);
+	if( config.spd.enable ) {
+		misc_set_bit( &info.thread_exit, THREAD_SPD, 1);
+		msg.arg_in.wolf = VIDEO3_RUN_MODE_SPD;
+		manager_common_send_message(SERVER_VIDEO3, &msg);
+	}
 	/****************************/
 	return ret;
 }

@@ -69,6 +69,7 @@ typedef struct video3_spd_config_t {
 	int		cloud_report;
 	int		alarm_interval;
 	int		recording_length;
+	int		mt_enable;
 	int		width;
 	int		height;
 	char	file_path[MAX_SYSTEM_STRING_SIZE*2];

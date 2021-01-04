@@ -34,7 +34,7 @@
  * function
  */
 int video3_spd_proc(video3_spd_config_t *ctrl, int channel, rts_md_src *md_src, rts_pd_src *pd_src);
-int video3_spd_init(video3_spd_config_t *ctrl, rts_md_src *md_src, rts_pd_src *pd_src);
-int video3_spd_release(void);
+int video3_spd_init(video3_spd_config_t *ctrl, int channel, rts_md_src *md_src, rts_pd_src *pd_src);
+int video3_spd_release(int channel);
 
 #endif /* SERVER_VIDEO3_SPD_H_ */

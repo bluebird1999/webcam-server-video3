@@ -302,28 +302,30 @@ int video3_spd_proc(video3_spd_config_t *ctrl, int channel, rts_md_src *md_src, 
 			spd_trigger_message(ctrl);
 		}
 	}
-	if( !count )
-		count = 2 + buffer_frames;
-	count--;
-	if( !count ) {
-		ret_mt = rts_run_mt(mt_handle, md_res, mt_res);
-		if (ret_mt >=0 ) {
-			spd_motion_tracking(mt_res->mov_dis, &md_src, &buffer_frames);
-			int motion_flag = md_res->motion_flag ||
-					(mt_res->mov_dis.x != 0
-					|| mt_res->mov_dis.y != 0);
-			if (motion_flag == MD_STAT_MOTION) {
-				log_qcy(DEBUG_VERBOSE, "motion_detected");
-			}
-			if( mt_res->mov_dis.x != 0 || mt_res->mov_dis.y != 0 ) {
-				log_qcy(DEBUG_INFO, "motion tracking----x: %d, y: %d\n\n", mt_res->mov_dis.x, mt_res->mov_dis.y);
+	if( ctrl->mt_enable ) {
+		if( !count )
+			count = 2 + buffer_frames;
+		count--;
+		if( !count ) {
+			ret_mt = rts_run_mt(mt_handle, md_res, mt_res);
+			if (ret_mt >=0 ) {
+				spd_motion_tracking(mt_res->mov_dis, &md_src, &buffer_frames);
+				int motion_flag = md_res->motion_flag ||
+						(mt_res->mov_dis.x != 0
+						|| mt_res->mov_dis.y != 0);
+				if (motion_flag == MD_STAT_MOTION) {
+					log_qcy(DEBUG_VERBOSE, "motion_detected");
+				}
+				if( mt_res->mov_dis.x != 0 || mt_res->mov_dis.y != 0 ) {
+					log_qcy(DEBUG_INFO, "motion tracking----x: %d, y: %d\n\n", mt_res->mov_dis.x, mt_res->mov_dis.y);
+				}
 			}
 		}
 	}
     return ret;
 }
 
-int video3_spd_init(video3_spd_config_t *ctrl, rts_md_src *md_src, rts_pd_src *pd_src)
+int video3_spd_init(video3_spd_config_t *ctrl, int channel, rts_md_src *md_src, rts_pd_src *pd_src)
 {
 	int ret = 0;
 	char fname[MAX_SYSTEM_STRING_SIZE*2];
@@ -341,24 +343,35 @@ int video3_spd_init(video3_spd_config_t *ctrl, rts_md_src *md_src, rts_pd_src *p
 				RTS_FORMAT_YUV420, NULL);
 	if (!md_handle || !mt_handle || !pd_handle || !src_img) {
 		ret = -1;
-		video3_spd_release();
+		video3_spd_release(-1);
 		return ret;
 	}
 	md_res = rts_create_res(md_handle);
 	mt_res = rts_create_res(mt_handle);
 	if (!md_res || !mt_res ) {
 		ret = -1;
-		video3_spd_release();
+		video3_spd_release(-1);
 		return ret;
 	}
 	md_src->src_img = src_img;
 	pd_src->src_img = src_img;
 	pd_src->md_res = md_res;
+	if( channel != -1) {
+		ret = rts_av_start_recv(channel);
+		if (ret) {
+			log_qcy(DEBUG_SERIOUS, "start recv isp fail, ret = %d", ret);
+			video3_spd_release(-1);
+			return -1;
+		}
+	}
 	return ret;
 }
 
-int video3_spd_release(void)
+int video3_spd_release(int channel)
 {
+	if( channel != -1) {
+		rts_av_stop_recv(channel);
+	}
 	rts_release_obj(&src_img);
 	rts_release_handle(&md_handle);
 	rts_release_handle(&pd_handle);
