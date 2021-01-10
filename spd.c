@@ -38,7 +38,6 @@
 #include "../../server/miio/miio_interface.h"
 #include "../../server/recorder/recorder_interface.h"
 #include "../../server/realtek/realtek_interface.h"
-#include "../../server/micloud/micloud_interface.h"
 #include "../../server/video/video_interface.h"
 #include "../../server/device/device_interface.h"
 //server header
@@ -62,7 +61,6 @@ static rts_md_cfg md_cfg;
 static rts_pd_cfg pd_cfg;
 static rts_mt_cfg mt_cfg;
 static rts_pd_res pd_res = {0};
-static unsigned long long int last_report = 0;
 static unsigned int	buffer_frames;
 
 //function
@@ -72,63 +70,6 @@ static unsigned int	buffer_frames;
  * %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  * %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  */
-static int spd_trigger_message(video3_spd_config_t *config)
-{
-	int ret = 0;
-	unsigned long long int now;
-	recorder_init_t init;
-	if( config->cloud_report ) {
-		now = time_get_now_stamp();
-		if( config->alarm_interval < 1)
-			config->alarm_interval = 1;
-		if( ( now - last_report) >= config->alarm_interval * 60 ) {
-			last_report = now;
-			message_t msg;
-			/********motion notification********/
-			msg_init(&msg);
-			msg.message = MICLOUD_EVENT_TYPE_PEOPLEMOTION;
-			msg.sender = msg.receiver = SERVER_VIDEO3;
-			msg.extra = &now;
-			msg.extra_size = sizeof(now);
-			ret = manager_common_send_message(SERVER_MICLOUD, &msg);
-			/********recorder********/
-			msg_init(&msg);
-			memset(&init, 0, sizeof(init));
-			msg.message = MSG_RECORDER_ADD;
-			msg.sender = msg.receiver = SERVER_VIDEO3;
-			init.video_channel = 0;
-			init.mode = RECORDER_MODE_BY_TIME;
-			init.type = RECORDER_TYPE_MOTION_DETECTION;
-			init.audio = 1;
-			memset(init.start, 0, sizeof(init.start));
-			time_get_now_str(init.start);
-			now += config->recording_length;
-			memset(init.stop, 0, sizeof(init.stop));
-			time_stamp_to_date(now, init.stop);
-			init.repeat = 0;
-			init.repeat_interval = 0;
-			init.quality = 0;
-			msg.arg = &init;
-			msg.arg_size = sizeof(recorder_init_t);
-			msg.extra = &now;
-			msg.extra_size = sizeof(now);
-			ret = manager_common_send_message(SERVER_RECORDER,    &msg);
-			/********snap shot********/
-			msg_init(&msg);
-			msg.sender = msg.receiver = SERVER_VIDEO;
-			msg.arg_in.cat = 0;
-			msg.arg_in.dog = 1;
-			msg.arg_in.duck = 0;
-			msg.arg_in.tiger = RTS_AV_CB_TYPE_ASYNC;
-			msg.arg_in.chick = RECORDER_TYPE_HUMAN_DETECTION;
-			msg.message = MSG_VIDEO_SNAPSHOT;
-			manager_common_send_message(SERVER_VIDEO, &msg);
-			/**********************************************/
-		}
-	}
-	return ret;
-}
-
 static void spd_set_md_default_parameter_mt(rts_md_cfg *cfg, int width, int height)
 {
 	cfg->w = width;
@@ -299,7 +240,7 @@ int video3_spd_proc(video3_spd_config_t *ctrl, int channel, rts_md_src *md_src, 
 					pd_res.pd_boxes->conf[1]
 					);
 			}
-			spd_trigger_message(ctrl);
+			video3_spd_trigger_message();
 		}
 	}
 	if( ctrl->mt_enable ) {

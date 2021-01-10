@@ -191,7 +191,7 @@ int video3_config_video_set(int module, void* arg)
 		msg_init(&msg);
 		msg.message = MSG_MANAGER_TIMER_ADD;
 		msg.sender = SERVER_VIDEO3;
-		msg.arg_in.cat = 30000;	//1min
+		msg.arg_in.cat = 1000;	//1 sec
 		msg.arg_in.dog = 0;
 		msg.arg_in.duck = 0;
 		msg.arg_in.handler = &video3_config_save;

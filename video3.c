@@ -33,6 +33,8 @@
 #include "../../server/miio/miio_interface.h"
 #include "../../server/recorder/recorder_interface.h"
 #include "../../server/device/device_interface.h"
+#include "../../server/micloud/micloud_interface.h"
+#include "../../server/video/video_interface.h"
 //server header
 #include "video3.h"
 #include "config.h"
@@ -50,6 +52,8 @@ static	video_stream_t		stream={-1,-1,-1,-1};
 static	video3_config_t		config;
 static	pthread_mutex_t		mutex = PTHREAD_MUTEX_INITIALIZER;
 static	pthread_cond_t		cond = PTHREAD_COND_INITIALIZER;
+static  pthread_rwlock_t	ilock = PTHREAD_RWLOCK_INITIALIZER;
+static	long long int		last_report = 0;
 
 //function
 //common
@@ -231,8 +235,8 @@ static void video3_mjpeg_func(void *priv, struct rts_av_profile *profile, struct
 		log_qcy(DEBUG_WARNING, "open video3 jpg snapshot file %s fail\n", (char*)priv);
 		return;
     }
-    if( !video3_check_sd() )
-    	fwrite(buffer->vm_addr, 1, buffer->bytesused, pfile);
+//    if( !video3_check_sd() )
+   	fwrite(buffer->vm_addr, 1, buffer->bytesused, pfile);
     RTS_SAFE_RELEASE(pfile, fclose);
     return;
 }
@@ -248,6 +252,10 @@ static int video3_snapshot(message_t *msg)
 	cb.interval = msg->arg_in.duck;
 	cb.type = msg->arg_in.tiger;
 	if( msg->arg_in.chick == RECORDER_TYPE_MOTION_DETECTION ) {
+		memset( filename, 0, sizeof(filename) );
+		sprintf( filename, "%smotion.jpg", config.jpg.image_path );
+	}
+	else if( msg->arg_in.chick == RECORDER_TYPE_HUMAN_DETECTION ) {
 		memset( filename, 0, sizeof(filename) );
 		sprintf( filename, "%smotion.jpg", config.jpg.image_path );
 	}
@@ -269,6 +277,8 @@ static int *video3_md_func(void *arg)
 	video3_md_config_t ctrl;
 	int st;
 	char fname[MAX_SYSTEM_STRING_SIZE];
+    signal(SIGINT, server_thread_termination);
+    signal(SIGTERM, server_thread_termination);
     sprintf(fname, "md-%d",time_get_now_stamp());
     misc_set_thread_name(fname);
     pthread_detach(pthread_self());
@@ -277,6 +287,7 @@ static int *video3_md_func(void *arg)
     video3_md_init( &ctrl, 1920, 1080);
     misc_set_bit(&info.thread_start, THREAD_MD, 1 );
     manager_common_send_dummy(SERVER_VIDEO3);
+    log_qcy(DEBUG_INFO, "video3 object detection thread init success!");
     while( 1 ) {
     	st = info.status;
     	if( info.exit )
@@ -306,6 +317,8 @@ static void *video3_spd_func(void *arg)
 	video3_spd_config_t ctrl;
 	rts_md_src md_src;
 	rts_pd_src pd_src;
+    signal(SIGINT, server_thread_termination);
+    signal(SIGTERM, server_thread_termination);
 	char fname[MAX_SYSTEM_STRING_SIZE];
     sprintf(fname, "spd-%d",time_get_now_stamp());
     misc_set_thread_name(fname);
@@ -319,6 +332,7 @@ static void *video3_spd_func(void *arg)
     }
     misc_set_bit(&info.thread_start, THREAD_SPD, 1 );
     manager_common_send_dummy(SERVER_VIDEO3);
+    log_qcy(DEBUG_INFO, "video3 human detection thread init success!");
     while( 1 ) {
     	st = info.status;
     	if( info.exit )
@@ -854,7 +868,8 @@ static void task_stop(void)
 			break;
 		case STATUS_START:
 		case STATUS_RUN:
-			if( info.task.msg.arg_in.cat > 0 ) {
+			if( (info.task.msg.arg_in.cat > 0) ||
+					(!info.task.msg.arg_in.duck && (info.task.msg.sender == SERVER_RECORDER) ) ) {	//real stop == 0
 				goto exit;
 				break;
 			}
@@ -975,9 +990,11 @@ static void task_default(void)
  */
 static void *server_func(void)
 {
+    signal(SIGINT, server_thread_termination);
+    signal(SIGTERM, server_thread_termination);
 	misc_set_thread_name("server_video3");
 	pthread_detach(pthread_self());
-	msg_buffer_init2(&message, MSG_BUFFER_OVERFLOW_NO, &mutex);
+	msg_buffer_init2(&message, _config_.msg_overrun, &mutex);
 	info.init = 1;
 	//default task
 	info.task.func = task_default;
@@ -994,7 +1011,133 @@ static void *server_func(void)
 /*
  * internal interface
  */
+int video3_md_trigger_message(void)
+{
+	int ret = 0;
+	recorder_init_t init;
+	unsigned long long int now;
+	if( config.md.cloud_report ) {
+		now = time_get_now_stamp();
+		if( config.md.alarm_interval < 1)
+			config.md.alarm_interval = 1;
+		pthread_rwlock_rdlock(&ilock);
+		if( ( now - last_report) >= config.md.alarm_interval * 60 ) {
+			pthread_rwlock_unlock(&ilock);
+			pthread_rwlock_wrlock(&ilock);
+			last_report = now;
+			pthread_rwlock_unlock(&ilock);
+			message_t msg;
+			/********motion notification********/
+			msg_init(&msg);
+			msg.message = MICLOUD_EVENT_TYPE_OBJECTMOTION;
+			msg.sender = msg.receiver = SERVER_VIDEO3;
+			msg.extra = &now;
+			msg.extra_size = sizeof(now);
+			ret = manager_common_send_message(SERVER_MICLOUD, &msg);
+			/********recorder********/
+			msg_init(&msg);
+			msg.message = MSG_RECORDER_ADD;
+			msg.sender = msg.receiver = SERVER_VIDEO3;
+			memset(&init, 0, sizeof(init));
+			init.video_channel = 0;
+			init.mode = RECORDER_MODE_BY_TIME;
+			init.type = RECORDER_TYPE_MOTION_DETECTION;
+			init.audio = 1;
+			memset(init.start, 0, sizeof(init.start));
+			time_get_now_str(init.start);
+			now += config.md.recording_length;
+			memset(init.stop, 0, sizeof(init.stop));
+			time_stamp_to_date(now, init.stop);
+			init.repeat = 0;
+			init.repeat_interval = 0;
+			init.quality = 0;
+			msg.arg = &init;
+			msg.arg_size = sizeof(recorder_init_t);
+			msg.extra = &now;
+			msg.extra_size = sizeof(now);
+			ret = manager_common_send_message(SERVER_RECORDER,    &msg);
+			/********snap shot********/
+			msg_init(&msg);
+			msg.sender = msg.receiver = SERVER_VIDEO;
+			msg.arg_in.cat = 0;
+			msg.arg_in.dog = 1;
+			msg.arg_in.duck = 0;
+			msg.arg_in.tiger = RTS_AV_CB_TYPE_ASYNC;
+			msg.arg_in.chick = RECORDER_TYPE_MOTION_DETECTION;
+			msg.message = MSG_VIDEO_SNAPSHOT;
+			manager_common_send_message(SERVER_VIDEO, &msg);
+			/**********************************************/
+		}
+		else {
+			pthread_rwlock_unlock(&ilock);
+		}
+	}
+	return ret;
+}
 
+int video3_spd_trigger_message(void)
+{
+	int ret = 0;
+	unsigned long long int now;
+	recorder_init_t init;
+	if( config.spd.cloud_report ) {
+		now = time_get_now_stamp();
+		if( config.spd.alarm_interval < 1)
+			config.spd.alarm_interval = 1;
+		pthread_rwlock_rdlock(&ilock);
+		if( ( now - last_report) >= config.spd.alarm_interval * 60 ) {
+			pthread_rwlock_unlock(&ilock);
+			pthread_rwlock_wrlock(&ilock);
+			last_report = now;
+			pthread_rwlock_unlock(&ilock);
+			message_t msg;
+			/********motion notification********/
+			msg_init(&msg);
+			msg.message = MICLOUD_EVENT_TYPE_PEOPLEMOTION;
+			msg.sender = msg.receiver = SERVER_VIDEO3;
+			msg.extra = &now;
+			msg.extra_size = sizeof(now);
+			ret = manager_common_send_message(SERVER_MICLOUD, &msg);
+			/********recorder********/
+			msg_init(&msg);
+			memset(&init, 0, sizeof(init));
+			msg.message = MSG_RECORDER_ADD;
+			msg.sender = msg.receiver = SERVER_VIDEO3;
+			init.video_channel = 0;
+			init.mode = RECORDER_MODE_BY_TIME;
+			init.type = RECORDER_TYPE_MOTION_DETECTION;
+			init.audio = 1;
+			memset(init.start, 0, sizeof(init.start));
+			time_get_now_str(init.start);
+			now += config.spd.recording_length;
+			memset(init.stop, 0, sizeof(init.stop));
+			time_stamp_to_date(now, init.stop);
+			init.repeat = 0;
+			init.repeat_interval = 0;
+			init.quality = 0;
+			msg.arg = &init;
+			msg.arg_size = sizeof(recorder_init_t);
+			msg.extra = &now;
+			msg.extra_size = sizeof(now);
+			ret = manager_common_send_message(SERVER_RECORDER,    &msg);
+			/********snap shot********/
+			msg_init(&msg);
+			msg.sender = msg.receiver = SERVER_VIDEO;
+			msg.arg_in.cat = 0;
+			msg.arg_in.dog = 1;
+			msg.arg_in.duck = 0;
+			msg.arg_in.tiger = RTS_AV_CB_TYPE_ASYNC;
+			msg.arg_in.chick = RECORDER_TYPE_HUMAN_DETECTION;
+			msg.message = MSG_VIDEO_SNAPSHOT;
+			manager_common_send_message(SERVER_VIDEO, &msg);
+			/**********************************************/
+		}
+		else {
+			pthread_rwlock_unlock(&ilock);
+		}
+	}
+	return ret;
+}
 /*
  * external interface
  */

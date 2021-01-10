@@ -42,7 +42,6 @@ static struct rts_video_md_attr *attr = NULL;
 struct rts_video_md_result result;
 static const int GRID_R = 72;
 static const int GRID_C = 128;
-static unsigned long long int last_report = 0;
 
 //function
 static int md_enable(int polling, int trig, unsigned int data_mode_mask, int width, int height, int sensitivity);
@@ -53,63 +52,6 @@ static int md_disable(void);
  * %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  * %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  */
-static int md_trigger_message(void)
-{
-	int ret = 0;
-	recorder_init_t init;
-	unsigned long long int now;
-	if( config.cloud_report ) {
-		now = time_get_now_stamp();
-		if( config.alarm_interval < 1)
-			config.alarm_interval = 1;
-		if( ( now - last_report) >= config.alarm_interval * 60 ) {
-			last_report = now;
-			message_t msg;
-			/********motion notification********/
-			msg_init(&msg);
-			msg.message = MICLOUD_EVENT_TYPE_OBJECTMOTION;
-			msg.sender = msg.receiver = SERVER_VIDEO3;
-			msg.extra = &now;
-			msg.extra_size = sizeof(now);
-			ret = manager_common_send_message(SERVER_MICLOUD, &msg);
-			/********recorder********/
-			msg_init(&msg);
-			msg.message = MSG_RECORDER_ADD;
-			msg.sender = msg.receiver = SERVER_VIDEO3;
-			memset(&init, 0, sizeof(init));
-			init.video_channel = 0;
-			init.mode = RECORDER_MODE_BY_TIME;
-			init.type = RECORDER_TYPE_MOTION_DETECTION;
-			init.audio = 1;
-			memset(init.start, 0, sizeof(init.start));
-			time_get_now_str(init.start);
-			now += config.recording_length;
-			memset(init.stop, 0, sizeof(init.stop));
-			time_stamp_to_date(now, init.stop);
-			init.repeat = 0;
-			init.repeat_interval = 0;
-			init.quality = 0;
-			msg.arg = &init;
-			msg.arg_size = sizeof(recorder_init_t);
-			msg.extra = &now;
-			msg.extra_size = sizeof(now);
-			ret = manager_common_send_message(SERVER_RECORDER,    &msg);
-			/********snap shot********/
-			msg_init(&msg);
-			msg.sender = msg.receiver = SERVER_VIDEO;
-			msg.arg_in.cat = 0;
-			msg.arg_in.dog = 1;
-			msg.arg_in.duck = 0;
-			msg.arg_in.tiger = RTS_AV_CB_TYPE_ASYNC;
-			msg.arg_in.chick = RECORDER_TYPE_MOTION_DETECTION;
-			msg.message = MSG_VIDEO_SNAPSHOT;
-			manager_common_send_message(SERVER_VIDEO, &msg);
-			/**********************************************/
-		}
-	}
-	return ret;
-}
-
 static int md_received(int idx, struct rts_video_md_result *result, void *priv)
 {
 	int ret = 0;
@@ -117,7 +59,7 @@ static int md_received(int idx, struct rts_video_md_result *result, void *priv)
 		return -1;
 	log_qcy(DEBUG_INFO, "motion data received\n");
 	if(!result) {
-		md_trigger_message();
+//		md_trigger_message();
 	}
 	return 0;
 }
@@ -310,7 +252,7 @@ int video3_md_proc(void)
 	log_qcy(DEBUG_INFO, "get data\n");
 	ret = md_process_data(&result);
 	if(!ret) {
-		md_trigger_message();
+		video3_md_trigger_message();
 	}
 	status = 0;
 	return 0;
