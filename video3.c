@@ -276,6 +276,7 @@ static int *video3_md_func(void *arg)
 {
 	video3_md_config_t ctrl;
 	int st;
+	int init = 0;
 	char fname[MAX_SYSTEM_STRING_SIZE];
     signal(SIGINT, server_thread_termination);
     signal(SIGTERM, server_thread_termination);
@@ -284,7 +285,6 @@ static int *video3_md_func(void *arg)
     pthread_detach(pthread_self());
     //init
     memcpy( &ctrl, (video3_md_config_t*)arg, sizeof(video3_md_config_t) );
-    video3_md_init( &ctrl, 1920, 1080);
     misc_set_bit(&info.thread_start, THREAD_MD, 1 );
     manager_common_send_dummy(SERVER_VIDEO3);
     log_qcy(DEBUG_INFO, "video3 object detection thread init success!");
@@ -299,6 +299,10 @@ static int *video3_md_func(void *arg)
     	else if( st == STATUS_START )
     		continue;
     	if( misc_get_bit(info.thread_exit, THREAD_MD) ) break;
+    	if( !init ) {
+    	    video3_md_init( &ctrl, 1920, 1080);
+    	    init = 1;
+    	}
  		video3_md_proc();
  		usleep(100*1000);
     }
@@ -314,6 +318,7 @@ static void *video3_spd_func(void *arg)
 {
 	int st;
 	int ret;
+	int init = 0;
 	video3_spd_config_t ctrl;
 	rts_md_src md_src;
 	rts_pd_src pd_src;
@@ -325,11 +330,6 @@ static void *video3_spd_func(void *arg)
     pthread_detach(pthread_self());
     //init
     memcpy( &ctrl, (video3_spd_config_t*)arg, sizeof(video3_spd_config_t) );
-    ret = video3_spd_init( &ctrl, stream.isp, &md_src, &pd_src);
-    if( ret ) {
-    	log_qcy(DEBUG_INFO, "video3 human detection thread init failed!");
-    	goto exit;
-    }
     misc_set_bit(&info.thread_start, THREAD_SPD, 1 );
     manager_common_send_dummy(SERVER_VIDEO3);
     log_qcy(DEBUG_INFO, "video3 human detection thread init success!");
@@ -345,6 +345,14 @@ static void *video3_spd_func(void *arg)
     		continue;
     	if( misc_get_bit(info.thread_exit, THREAD_SPD) )
     		break;
+    	if( !init ) {
+    	    ret = video3_spd_init( &ctrl, stream.isp, &md_src, &pd_src);
+    	    if( ret ) {
+    	    	log_qcy(DEBUG_INFO, "video3 human detection thread init failed!");
+    	    	break;
+    	    }
+    	    init = 1;
+    	}
     	video3_spd_proc( &ctrl, stream.isp, &md_src, &pd_src);
     	usleep(1000*1000 / config.profile.profile.video.denominator);	//
     }
