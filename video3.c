@@ -442,7 +442,7 @@ static int md_check_scheduler(void)
 			if( !md_run.started ) {
 				//start the md thread
 				if( !misc_get_bit(info.thread_start, THREAD_MD) ) {
-//					ret = pthread_create(&md_id, NULL, video3_md_func, (void*)&config.md);
+					ret = pthread_create(&md_id, NULL, video3_md_func, (void*)&config.md);
 				}
 				ret = 0;
 				if( config.spd.enable ) {
