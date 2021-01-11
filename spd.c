@@ -160,16 +160,12 @@ static void spd_set_pd_default_parameter(rts_pd_cfg *cfg, int width, int height,
 static void spd_motion_tracking(rts_point mov_dis, rts_md_src *src, int *ad_bf)
 {
 	message_t msg;
-	char cmd_buf[128];
 	float x_ratio = 45 / 128.0;
 	float y_ratio = 1.0;
 	int motor_x = -mov_dis.x * x_ratio;
 	int motor_y = -mov_dis.y * y_ratio;
-
 	if (motor_x != 0) {
 		src->retrain_flag = 1;
-		sprintf(cmd_buf, "/bin/motor_control x %d > /dev/null\n",
-			motor_x);
 		msg_init(&msg);
 		msg.sender = msg.receiver = SERVER_VIDEO3;
 		msg.message = MSG_DEVICE_CTRL_DIRECT;
@@ -186,7 +182,6 @@ static void spd_motion_tracking(rts_point mov_dis, rts_md_src *src, int *ad_bf)
 	}
 	if (motor_y != 0) {
 		src->retrain_flag = 1;
-		sprintf(cmd_buf, "/bin/motor_control y %d > /dev/null\n", motor_y);
 		msg_init(&msg);
 		msg.sender = msg.receiver = SERVER_VIDEO3;
 		msg.message = MSG_DEVICE_CTRL_DIRECT;

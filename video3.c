@@ -465,7 +465,6 @@ static int md_check_scheduler(void)
 					return -1;
 				}
 				else {
-					log_qcy(DEBUG_INFO, "spd thread create successful!");
 					md_run.started = 1;
 				    /********message body********/
 					msg_init(&msg);
