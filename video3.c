@@ -170,7 +170,7 @@ static int video3_set_property(message_t *msg)
 			send_msg.arg_in.wolf = 1;
 			send_msg.arg = &temp;
 			send_msg.arg_size = sizeof(temp);
-			md_run.changed = 1;
+//			md_run.changed = 1;
 		}
 	}
 	else if( msg->arg_in.cat == VIDEO3_PROPERTY_MOTION_SENSITIVITY ) {
@@ -217,7 +217,7 @@ static int video3_set_property(message_t *msg)
 			send_msg.arg_in.wolf = 1;
 			send_msg.arg = &temp;
 			send_msg.arg_size = sizeof(temp);
-			md_run.changed = 1;
+//			md_run.changed = 1;
 		}
 	}
 	/***************************/
@@ -235,9 +235,13 @@ static void video3_mjpeg_func(void *priv, struct rts_av_profile *profile, struct
 		log_qcy(DEBUG_WARNING, "open video3 jpg snapshot file %s fail\n", (char*)priv);
 		return;
     }
+    log_qcy(DEBUG_INFO, "---+++VIDEO3 jpeg function, file pt= %p, data-addr=%p, size=%d", pfile,
+    		buffer->vm_addr, buffer->bytesused);
 //    if( !video3_check_sd() )
    	fwrite(buffer->vm_addr, 1, buffer->bytesused, pfile);
+    log_qcy(DEBUG_INFO, "---+++VIDEO3 jpeg function, write success!");
     RTS_SAFE_RELEASE(pfile, fclose);
+    log_qcy(DEBUG_INFO, "---+++VIDEO3 jpeg function, clean success!");
     return;
 }
 
@@ -292,13 +296,12 @@ static int *video3_md_func(void *arg)
     	st = info.status;
     	if( info.exit )
     		break;
-    	if( !md_run.started )
+    	if( misc_get_bit(info.thread_exit, THREAD_MD) )
     		break;
-    	if( (st != STATUS_START) && (st != STATUS_RUN) )
+    	if(  (st != STATUS_IDLE) && (st != STATUS_START) && (st != STATUS_RUN) )
     		break;
-    	else if( st == STATUS_START )
+    	else if( (st == STATUS_START) || (st == STATUS_IDLE) )
     		continue;
-    	if( misc_get_bit(info.thread_exit, THREAD_MD) ) break;
     	if( !init ) {
     	    video3_md_init( &ctrl, 1920, 1080);
     	    init = 1;
@@ -309,6 +312,7 @@ static int *video3_md_func(void *arg)
     //release
     video3_md_release();
     misc_set_bit(&info.thread_start, THREAD_MD, 0 );
+    misc_set_bit( &info.thread_exit, THREAD_MD, 0);
     manager_common_send_dummy(SERVER_VIDEO3);
     log_qcy(DEBUG_INFO, "-----------thread exit: %s-----------",fname);
     pthread_exit(0);
@@ -337,14 +341,12 @@ static void *video3_spd_func(void *arg)
     	st = info.status;
     	if( info.exit )
     		break;
-    	if( !md_run.started )
-    		break;
-    	if( (st != STATUS_START) && (st != STATUS_RUN) )
-    		break;
-    	else if( st == STATUS_START )
-    		continue;
     	if( misc_get_bit(info.thread_exit, THREAD_SPD) )
     		break;
+    	if(  (st != STATUS_IDLE) && (st != STATUS_START) && (st != STATUS_RUN) )
+    		break;
+    	else if( (st == STATUS_START) || (st == STATUS_IDLE) )
+    		continue;
     	if( !init ) {
     	    ret = video3_spd_init( &ctrl, stream.isp, &md_src, &pd_src);
     	    if( ret ) {
@@ -358,7 +360,8 @@ static void *video3_spd_func(void *arg)
     }
     //release
     video3_spd_release(stream.isp);
-    misc_set_bit(&info.thread_start, THREAD_SPD, 0 );
+    misc_set_bit( &info.thread_start, THREAD_SPD, 0 );
+    misc_set_bit( &info.thread_exit, THREAD_SPD, 0);
 exit:
     manager_common_send_dummy(SERVER_VIDEO3);
     log_qcy(DEBUG_INFO, "-----------thread exit: %s-----------",fname);
@@ -408,12 +411,11 @@ static int stream_start(void)
 	else {
 		return -1;
 	}
-/*    ret = rts_av_start_recv(stream.isp);
+ /*   ret = rts_av_start_recv(stream.isp);
     if (ret) {
     	log_qcy(DEBUG_SERIOUS, "start recv isp fail, ret = %d", ret);
     	return -1;
-    }
-*/
+    }*/
     return 0;
 }
 
@@ -447,12 +449,26 @@ static int md_check_scheduler(void)
 	if( config.md.enable ) {
 		ret = video3_md_check_scheduler_time(&md_run.scheduler, &md_run.mode);
 		if( ret==1 ) {
-			if( !md_run.started ) {
+			if( !md_run.started &&
+					!misc_get_bit(info.thread_start, THREAD_MD) &&
+					!misc_get_bit(info.thread_start, THREAD_SPD) ) {
 				//start the md thread
-				if( !misc_get_bit(info.thread_start, THREAD_MD) ) {
-					ret = pthread_create(&md_id, NULL, video3_md_func, (void*)&config.md);
+				md_run.started = 1;
+				ret = pthread_create(&md_id, NULL, video3_md_func, (void*)&config.md);
+				if( !ret ) {
+					log_qcy(DEBUG_INFO, "md thread create successful!");
+				    /********message body********/
+					msg_init(&msg);
+					msg.message = MSG_VIDEO3_START;
+					msg.sender = msg.receiver = SERVER_VIDEO3;
+					msg.arg_in.wolf = VIDEO3_RUN_MODE_MD_HARD;
+				    manager_common_send_message(SERVER_VIDEO3, &msg);
+					/****************************/
 				}
-				ret = 0;
+				else {
+					log_qcy(DEBUG_SERIOUS, "md thread create error! ret = %d",ret);
+					goto stop_md;
+				}
 				if( config.spd.enable ) {
 					config.spd.alarm_interval = config.md.alarm_interval;
 					config.spd.cloud_report = config.md.cloud_report;
@@ -460,47 +476,38 @@ static int md_check_scheduler(void)
 					config.spd.recording_length = config.md.recording_length;
 					config.spd.width = config.profile.profile.video.width;
 					config.spd.height = config.profile.profile.video.height;
-					if( !misc_get_bit(info.thread_start, THREAD_SPD) ) {
-						ret |= pthread_create(&spd_id, NULL, video3_spd_func, (void*)&config.spd);
-					}
-				}
-				if(ret != 0) {
-					misc_set_bit( &info.thread_exit, THREAD_MD, 1);
-					if( config.spd.enable ) {
-						misc_set_bit( &info.thread_exit, THREAD_SPD, 1);
-					}
-					log_qcy(DEBUG_SERIOUS, "spd thread create error! ret = %d",ret);
-					return -1;
-				}
-				else {
-					md_run.started = 1;
-				    /********message body********/
-					msg_init(&msg);
-					msg.message = MSG_VIDEO3_START;
-					msg.sender = msg.receiver = SERVER_VIDEO3;
-					msg.arg_in.wolf = VIDEO3_RUN_MODE_MD_HARD;
-				    manager_common_send_message(SERVER_VIDEO3, &msg);
-				    if( config.spd.enable ) {
-				    	log_qcy(DEBUG_INFO, "spd thread create successful!");
+					ret = pthread_create(&spd_id, NULL, video3_spd_func, (void*)&config.spd);
+					if( !ret ) {
+						log_qcy(DEBUG_INFO, "spd thread create successful!");
+						/********message body********/
+						msg_init(&msg);
+						msg.message = MSG_VIDEO3_START;
+						msg.sender = msg.receiver = SERVER_VIDEO3;
 						msg.arg_in.wolf = VIDEO3_RUN_MODE_SPD;
 						manager_common_send_message(SERVER_VIDEO3, &msg);
-				    }
-					/****************************/
+						/****************************/
+					}
+					else {
+						log_qcy(DEBUG_SERIOUS, "spd thread create error! ret = %d",ret);
+						goto stop_md;
+					}
 				}
 			}
-			else if( md_run.changed ) {
+			if( md_run.changed ) {
 				md_run.changed = 0;
 				goto stop_md;
 			}
 		}
 		else {
-			if( md_run.started ) {
+			if( misc_get_bit(info.thread_start, THREAD_MD) ||
+					misc_get_bit(info.thread_start, THREAD_MD)) {
 				goto stop_md;
 			}
 		}
 	}
 	else {
-		if( md_run.started ) {
+		if( misc_get_bit(info.thread_start, THREAD_SPD) ||
+				misc_get_bit(info.thread_start, THREAD_MD)) {
 			goto stop_md;
 		}
 	}
@@ -641,6 +648,7 @@ static int server_message_proc(void)
 			ret, message.head, message.tail);
 	switch(msg.message) {
 		case MSG_VIDEO3_START:
+			break;
 			msg_init(&info.task.msg);
 			msg_copy(&info.task.msg, &msg);
 			info.task.func = task_start;
@@ -648,10 +656,14 @@ static int server_message_proc(void)
 			info.msg_lock = 1;
 			break;
 		case MSG_VIDEO3_STOP:
+			break;
 			msg_init(&info.task.msg);
 			msg_copy(&info.task.msg, &msg);
 			info.task.msg.arg_in.cat = info.status2;
-			misc_set_bit(&info.task.msg.arg_in.cat, msg.arg_in.wolf, 0);
+			if( info.task.msg.sender == SERVER_RECORDER)
+				misc_set_bit(&info.task.msg.arg_in.cat, VIDEO3_RUN_MODE_SNAP, 0);
+			else
+				misc_set_bit(&info.task.msg.arg_in.cat, msg.arg_in.wolf, 0);
 			info.task.func = task_stop;
 			info.task.start = info.status;
 			info.msg_lock = 1;
@@ -842,7 +854,10 @@ static void task_start(void)
 	return;
 exit:
 	if( msg.result == 0 ) {
-		misc_set_bit(&info.status2, info.task.msg.arg_in.wolf, 1);
+		if( info.task.msg.sender == SERVER_RECORDER)
+			misc_set_bit(&info.status2, VIDEO3_RUN_MODE_SNAP, 1);
+		else
+			misc_set_bit(&info.status2, info.task.msg.arg_in.wolf, 1);
 	}
 	manager_common_send_message(info.task.msg.receiver, &msg);
 	msg_free(&info.task.msg);
@@ -894,7 +909,10 @@ static void task_stop(void)
 	return;
 exit:
 	if( msg.result==0 ) {
-		misc_set_bit(&info.status2, info.task.msg.arg_in.wolf, 0);
+		if( info.task.msg.sender == SERVER_RECORDER)
+			misc_set_bit(&info.status2, VIDEO3_RUN_MODE_SNAP, 0);
+		else
+			misc_set_bit(&info.status2, info.task.msg.arg_in.wolf, 0);
 	}
 	manager_common_send_message(info.task.msg.receiver, &msg);
 	msg_free(&info.task.msg);
@@ -975,8 +993,10 @@ static void task_default(void)
 			server_setup();
 			break;
 		case STATUS_IDLE:
+			info.status = STATUS_START;
 			break;
 		case STATUS_START:
+			server_start();
 			break;
 		case STATUS_RUN:
 			break;
