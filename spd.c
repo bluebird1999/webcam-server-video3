@@ -51,13 +51,18 @@
  */
 
 //variable
-static void *md_handle;
+static void *pd_md_handle;
 static void *pd_handle;
 static void *mt_handle;
+static void *mt_md_handle;
 static rts_img *src_img;
-static rts_md_res *md_res;
+static rts_md_src md_src;
+static rts_pd_src pd_src;
+static rts_md_res *mt_md_res;
+static rts_md_res *pd_md_res;
 static rts_mt_res *mt_res;
-static rts_md_cfg md_cfg;
+static rts_md_cfg pd_md_cfg;
+static rts_md_cfg mt_md_cfg;
 static rts_pd_cfg pd_cfg;
 static rts_mt_cfg mt_cfg;
 static rts_pd_res pd_res = {0};
@@ -157,51 +162,53 @@ static void spd_set_pd_default_parameter(rts_pd_cfg *cfg, int width, int height,
 	cfg->h = height;
 }
 
-static void spd_motion_tracking(rts_point mov_dis, rts_md_src *src, int *ad_bf)
+static void spd_motion_tracking(rts_point mov_dis,int *ad_bf)
 {
 	message_t msg;
-	float x_ratio = 45 / 128.0;
-	float y_ratio = 1.0;
+	float x_ratio = 5.0;
+	float y_ratio = 3.0;
 	int motor_x = -mov_dis.x * x_ratio;
 	int motor_y = -mov_dis.y * y_ratio;
-	if (motor_x != 0) {
-		src->retrain_flag = 1;
+	if (motor_x != 0 || motor_y != 0) {
+		md_src.retrain_flag = 1;
 		msg_init(&msg);
 		msg.sender = msg.receiver = SERVER_VIDEO3;
 		msg.message = MSG_DEVICE_CTRL_DIRECT;
+		msg.arg_in.cat = DEVICE_CTRL_MOTOR_ROTATE;
 		if(  motor_x > 0 )
-			msg.arg_in.cat = DEVICE_CTRL_MOTOR_HOR_RIGHT;
+		{
+			msg.arg_in.chick = DEVICE_CTRL_MOTOR_HOR_RIGHT;
+			msg.arg_in.dog = motor_x;
+		}
 		else
-			msg.arg_in.cat = DEVICE_CTRL_MOTOR_HOR_LEFT;
-		msg.arg_in.wolf = 0;
-		msg.arg_in.handler = 0;
-		msg.arg_pass.cat = 0;
-		msg.arg_pass.wolf = 0;
-		msg.arg_pass.handler = 0;
-		manager_common_send_message(SERVER_DEVICE, &msg);
-	}
-	if (motor_y != 0) {
-		src->retrain_flag = 1;
-		msg_init(&msg);
-		msg.sender = msg.receiver = SERVER_VIDEO3;
-		msg.message = MSG_DEVICE_CTRL_DIRECT;
+		{
+			msg.arg_in.chick = DEVICE_CTRL_MOTOR_HOR_LEFT;
+			msg.arg_in.dog = -motor_x;
+		}
+
 		if(  motor_y > 0 )
-			msg.arg_in.cat = DEVICE_CTRL_MOTOR_VER_UP;
+		{
+			msg.arg_in.duck = DEVICE_CTRL_MOTOR_VER_UP;
+			msg.arg_in.tiger = motor_y;
+		}
 		else
-			msg.arg_in.cat = DEVICE_CTRL_MOTOR_VER_DOWN;
-		msg.arg_in.wolf = 0;
-		msg.arg_in.handler = 0;
+		{
+			msg.arg_in.duck = DEVICE_CTRL_MOTOR_VER_DOWN;
+			msg.arg_in.tiger = -motor_y;
+		}
+
 		msg.arg_pass.cat = 0;
 		msg.arg_pass.wolf = 0;
 		msg.arg_pass.handler = 0;
 		manager_common_send_message(SERVER_DEVICE, &msg);
+		log_qcy(DEBUG_SERIOUS, "motor_x = %d, motor_y = %d",motor_x, motor_y);
 	}
 	//drop frames for stable image
 	//motr_steps * stpes_per_circle * secs_per_circle * fps
 	*ad_bf = abs(motor_x) / 170.0 * 8 * 30;
 }
 
-int video3_spd_proc(video3_spd_config_t *ctrl, int channel, rts_md_src *md_src, rts_pd_src *pd_src)
+int video3_spd_proc(video3_spd_config_t *ctrl, int channel)
 {
 	int ret = 0, ret_pd, ret_mt;
 	static unsigned int count = 0;
@@ -218,18 +225,18 @@ int video3_spd_proc(video3_spd_config_t *ctrl, int channel, rts_md_src *md_src, 
 	rts_set_rts_img_data(src_img, b->vm_addr, b->bytesused, NULL);
 	last_b = b;
 	//***
-	ret = rts_run_md(md_handle, md_src, md_res);
+	ret = rts_run_md(pd_md_handle, &md_src, pd_md_res);
 	if (ret < 0) {
     	ret = -1;
     	return ret;
 	}
-	ret_pd = rts_run_pd(pd_handle, pd_src, &pd_res);
+	ret_pd = rts_run_pd(pd_handle, &pd_src, &pd_res);
 	if (ret_pd >= 0) {
-		log_qcy(DEBUG_VERBOSE, "md_res fl<%d>\t nrobj<%d>", md_res->motion_flag, md_res->nr_obj);
+		log_qcy(DEBUG_VERBOSE, "md_res fl<%d>\t nrobj<%d>", pd_md_res->motion_flag, pd_md_res->nr_obj);
 		log_qcy(DEBUG_VERBOSE, "\t pd_fl <%d>\t nrpd<%d>\n", pd_res.pd_flag, pd_res.nr_pd);
 		if (pd_res.pd_flag) {
 			for (int i = 0; i < pd_res.nr_pd; i++) {
-				log_qcy(DEBUG_VERBOSE, "conf[%d] %.2f %.2f\n",
+				log_qcy(DEBUG_SERIOUS, "conf[%d] %.2f %.2f\n",
 					i,
 					pd_res.pd_boxes->conf[0],
 					pd_res.pd_boxes->conf[1]
@@ -239,14 +246,19 @@ int video3_spd_proc(video3_spd_config_t *ctrl, int channel, rts_md_src *md_src, 
 		}
 	}
 	if( ctrl->mt_enable ) {
+		ret = rts_run_md(mt_md_handle, &md_src, mt_md_res);
+			if (ret < 0) {
+		    	ret = -1;
+		    	return ret;
+		}
 		if( !count )
 			count = 2 + buffer_frames;
 		count--;
 		if( !count ) {
-			ret_mt = rts_run_mt(mt_handle, md_res, mt_res);
+			ret_mt = rts_run_mt(mt_handle, mt_md_res, mt_res);
 			if (ret_mt >=0 ) {
-				spd_motion_tracking(mt_res->mov_dis, &md_src, &buffer_frames);
-				int motion_flag = md_res->motion_flag ||
+				spd_motion_tracking(mt_res->mov_dis, &buffer_frames);
+				int motion_flag = mt_md_res->motion_flag ||
 						(mt_res->mov_dis.x != 0
 						|| mt_res->mov_dis.y != 0);
 				if (motion_flag == MD_STAT_MOTION) {
@@ -261,38 +273,41 @@ int video3_spd_proc(video3_spd_config_t *ctrl, int channel, rts_md_src *md_src, 
     return ret;
 }
 
-int video3_spd_init(video3_spd_config_t *ctrl, int channel, rts_md_src *md_src, rts_pd_src *pd_src)
+int video3_spd_init(video3_spd_config_t *ctrl, int channel)
 {
 	int ret = 0;
 	char fname[MAX_SYSTEM_STRING_SIZE*2];
 	//settings
-	spd_set_md_default_parameter_spd(&md_cfg, ctrl->width, ctrl->height);
+	spd_set_md_default_parameter_spd(&pd_md_cfg, ctrl->width, ctrl->height);
+	spd_set_md_default_parameter_mt(&mt_md_cfg, ctrl->width, ctrl->height);
 	memset(fname, 0, sizeof(fname));
 	sprintf(fname, "%s%s", ctrl->file_path, SPD_WEIGHT_FILE_NAME);
 	spd_set_pd_default_parameter(&pd_cfg, ctrl->width, ctrl->height, fname);
 	spd_set_mt_default_parameter(&mt_cfg, ctrl->width, ctrl->height);
 	//init
-	md_handle = rts_init_md(&md_cfg);
+	mt_md_handle = rts_init_md(&mt_md_cfg);
+	pd_md_handle = rts_init_md(&pd_md_cfg);
 	pd_handle = rts_init_pd(&pd_cfg);
 	mt_handle = rts_init_mt(&mt_cfg);
 	src_img = rts_create_rts_img(ctrl->width, ctrl->height, RTS_8U, 2,
 				RTS_FORMAT_YUV420, NULL);
-	if (!md_handle || !mt_handle || !pd_handle || !src_img) {
+	if (!pd_md_handle || !mt_md_handle || !mt_handle || !pd_handle || !src_img) {
 		ret = -1;
 		video3_spd_release(-1);
 		return ret;
 	}
-	md_res = rts_create_res(md_handle);
+	mt_md_res = rts_create_res(mt_md_handle);
+	pd_md_res = rts_create_res(pd_md_handle);
 	mt_res = rts_create_res(mt_handle);
-	if (!md_res || !mt_res ) {
+	if (!pd_md_res || !mt_md_res || !mt_res ) {
 		ret = -1;
 		video3_spd_release(-1);
 		return ret;
 	}
-	md_src->src_img = src_img;
-	pd_src->src_img = src_img;
-	pd_src->md_res = md_res;
-	if( channel != -1) {
+	md_src.src_img = src_img;
+	pd_src.src_img = src_img;
+	pd_src.md_res = pd_md_res;
+/*	if( channel != -1) {
 		ret = rts_av_start_recv(channel);
 		if (ret) {
 			log_qcy(DEBUG_SERIOUS, "start recv isp fail, ret = %d", ret);
@@ -300,18 +315,22 @@ int video3_spd_init(video3_spd_config_t *ctrl, int channel, rts_md_src *md_src, 
 			return -1;
 		}
 	}
+*/
 	return ret;
 }
 
 int video3_spd_release(int channel)
 {
-	if( channel != -1) {
+/*	if( channel != -1) {
 		rts_av_stop_recv(channel);
 	}
+*/
 	rts_release_obj(&src_img);
-	rts_release_handle(&md_handle);
+	rts_release_handle(&mt_md_handle);
+	rts_release_handle(&pd_md_handle);
 	rts_release_handle(&pd_handle);
 	rts_release_handle(&mt_handle);
-	rts_release_obj(&md_res);
+	rts_release_obj(&mt_md_res);
+	rts_release_obj(&pd_md_res);
 	rts_release_obj(&mt_res);
 }

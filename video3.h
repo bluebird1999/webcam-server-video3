@@ -28,15 +28,17 @@
 #define		VIDEO3_INIT_CONDITION_REALTEK		2
 
 #define		VIDEO3_EXIT_CONDITION			( (1 << SERVER_RECORDER) )
+
+#define		VIDEO3_MAX_JPEG_SIZE			16*1024
 /*
  * structure
  */
-typedef struct video3_md_run_t {
+typedef struct video3_motion_run_t {
 	int 				started;
 	scheduler_time_t  	scheduler;
 	int					mode;
 	char				changed;
-} video3_md_run_t;
+} video3_motion_run_t;
 /*
  * function
  */
