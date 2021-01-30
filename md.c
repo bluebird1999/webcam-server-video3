@@ -267,6 +267,7 @@ int video3_md_init(video3_md_config_t *md_config, int width, int height)
 	if (ret) {
 		log_qcy(DEBUG_SERIOUS, "query isp md attr fail, ret = %d\n", ret);
 		video3_md_release();
+		return ret;
 	}
 	mask = RTS_VIDEO_MD_DATA_TYPE_AVGY |
            RTS_VIDEO_MD_DATA_TYPE_RLTPRE |
@@ -278,6 +279,7 @@ int video3_md_init(video3_md_config_t *md_config, int width, int height)
 	if (ret) {
 		log_qcy(DEBUG_SERIOUS, "enable md fail\n");
 		video3_md_release();
+		return ret;
 	}
 	if (config.polling) {
 		unsigned int mask = attr->blocks->data_mode_mask;

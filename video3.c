@@ -55,6 +55,7 @@ static	pthread_mutex_t		mutex = PTHREAD_MUTEX_INITIALIZER;
 static	pthread_cond_t		cond = PTHREAD_COND_INITIALIZER;
 static  pthread_rwlock_t	ilock = PTHREAD_RWLOCK_INITIALIZER;
 static	long long int		last_report = 0;
+static 	int					motor_ready = 0;
 
 //function
 //common
@@ -114,6 +115,10 @@ static int video3_get_property(message_t *msg)
 		send_msg.arg = (void*)(&config.md.enable);
 		send_msg.arg_size = sizeof(config.md.enable);
 	}
+	else if( send_msg.arg_in.cat == VIDEO3_PROPERTY_MOTION_TRACKING_SWITCH) {
+		send_msg.arg = (void*)(&config.spd.mt_enable);
+		send_msg.arg_size = sizeof(config.spd.mt_enable);
+	}
 	else if( send_msg.arg_in.cat == VIDEO3_PROPERTY_MOTION_ALARM_INTERVAL) {
 		send_msg.arg = (void*)(&config.md.alarm_interval);
 		send_msg.arg_size = sizeof(config.md.alarm_interval);
@@ -156,8 +161,21 @@ static int video3_set_property(message_t *msg)
 		if( temp != config.md.enable ) {
 			config.md.enable = temp;
 			config.spd.enable = temp;
+//			config.spd.mt_enable = temp;
 			log_qcy(DEBUG_INFO, "changed the motion switch = %d", config.md.enable);
 			video3_config_video_set(CONFIG_VIDEO3_MD, &config.md);
+			video3_config_video_set(CONFIG_VIDEO3_SPD, &config.spd);
+			send_msg.arg_in.wolf = 1;
+			send_msg.arg = &temp;
+			send_msg.arg_size = sizeof(temp);
+		}
+	}
+	if( msg->arg_in.cat == VIDEO3_PROPERTY_MOTION_TRACKING_SWITCH ) {
+		temp = *((int*)(msg->arg));
+		if( temp != config.spd.mt_enable ) {
+			config.spd.mt_enable = temp;
+			log_qcy(DEBUG_INFO, "changed the motion tracking switch = %d", config.spd.mt_enable);
+			video3_config_video_set(CONFIG_VIDEO3_SPD, &config.spd);
 			send_msg.arg_in.wolf = 1;
 			send_msg.arg = &temp;
 			send_msg.arg_size = sizeof(temp);
@@ -235,16 +253,16 @@ static void video3_mjpeg_func(void *priv, struct rts_av_profile *profile, struct
 		log_qcy(DEBUG_WARNING, "video3 JPEG buffer NULL error!");
 		return;
     }
-    if( buffer->bytesused > VIDEO3_MAX_JPEG_SIZE ) {
-		log_qcy(DEBUG_WARNING, "video3 JPEG size %d bigger than limit!", buffer->bytesused);
-		return;
-    }
+//    if( buffer->bytesused > VIDEO3_MAX_JPEG_SIZE ) {
+//		log_qcy(DEBUG_WARNING, "video3 JPEG size %d bigger than limit!", buffer->bytesused);
+//		return;
+//    }
     pfile = fopen((char*)priv, "wb");
     if (!pfile) {
 		log_qcy(DEBUG_WARNING, "open video3 jpg snapshot file %s fail\n", (char*)priv);
 		return;
     }
-    log_qcy(DEBUG_INFO, "---+++VIDEO3 jpeg function, file pt= %p, data-addr=%p, size=%d", pfile,
+    log_qcy(DEBUG_INFO, "---+++VIDEO3 jpeg function, file pt= %p, path = %s, data-addr=%p, size=%d", pfile, (char*)priv,
     		buffer->vm_addr, buffer->bytesused);
 //    if( !video3_check_sd() )
    	fwrite(buffer->vm_addr, 1, buffer->bytesused, pfile);
@@ -345,6 +363,7 @@ static void *video3_spd_func(void *arg)
     manager_common_send_dummy(SERVER_VIDEO3);
     log_qcy(DEBUG_INFO, "video3 human detection thread init success!");
     while( 1 ) {
+    	ctrl.mt_enable = config.spd.mt_enable;
     	st = info.status;
     	if( info.exit )
     		break;
@@ -418,11 +437,11 @@ static int stream_start(void)
 	else {
 		return -1;
 	}
-    ret = rts_av_start_recv(stream.isp);
-    if (ret) {
-    	log_qcy(DEBUG_SERIOUS, "start recv isp fail, ret = %d", ret);
-    	return -1;
-    }
+//    ret = rts_av_start_recv(stream.isp);
+//    if (ret) {
+//    	log_qcy(DEBUG_SERIOUS, "start recv isp fail, ret = %d", ret);
+//    	return -1;
+//    }
     return 0;
 }
 
@@ -450,6 +469,17 @@ static int md_init_scheduler(void)
 
 static void motion_check_scheduler(void)
 {
+	message_t msg;
+	//get from device
+	if(!motor_ready)
+	{
+		msg_init(&msg);
+		msg.message = MSG_DEVICE_PROPERTY_GET;
+		msg.sender = msg.receiver = SERVER_VIDEO3;
+		msg.arg_pass.cat = DEVICE_ACTION_MOTO_STATUS;
+		manager_common_send_message(SERVER_DEVICE, &msg);
+		/****************************/
+	}
 	md_check_scheduler();
 	spd_check_scheduler();
 }
@@ -459,7 +489,7 @@ static int md_check_scheduler(void)
 	int ret;
 	message_t msg;
 	pthread_t md_id, spd_id;
-	if( config.md.enable ) {
+	if( config.md.enable && motor_ready) {
 		ret = video3_md_check_scheduler_time(&md_run.scheduler, &md_run.mode);
 		if( ret==1 ) {
 			if( !md_run.started && !misc_get_bit(info.thread_start, THREAD_MD) ) {
@@ -516,7 +546,7 @@ static int spd_check_scheduler(void)
 	int ret;
 	message_t msg;
 	pthread_t spd_id;
-	if( config.spd.enable ) {
+	if( config.spd.enable && motor_ready) {
 		ret = video3_md_check_scheduler_time(&md_run.scheduler, &md_run.mode);
 		if( ret==1 ) {
 			if( !spd_run.started && !misc_get_bit(info.thread_start, THREAD_SPD) ) {
@@ -589,7 +619,7 @@ static int video3_init(void)
     	log_qcy(DEBUG_SERIOUS, "fail to create jpg chn, ret = %d\n", stream.jpg);
         return -1;
     }
-    log_qcy(DEBUG_INFO, "jpg chnno:%d", stream.jpg);
+    log_qcy(DEBUG_INFO, "jpg chnno:%d stream.isp:%d", stream.jpg, stream.isp);
     ret = rts_av_bind(stream.isp, stream.jpg);
    	if (ret) {
    		log_qcy(DEBUG_SERIOUS, "fail to bind isp and jpg, ret %d", ret);
@@ -625,7 +655,7 @@ static void server_release_1(void)
 	msg_init(&msg);
 	msg.message = MSG_MANAGER_TIMER_REMOVE;
 	msg.sender = msg.receiver = SERVER_VIDEO3;
-	msg.arg_in.handler = md_check_scheduler;
+	msg.arg_in.handler = motion_check_scheduler;
 	manager_common_send_message(SERVER_MANAGER, &msg);
 	/****************************/
 }
@@ -788,6 +818,12 @@ static int server_message_proc(void)
 			break;
 		case MSG_VIDEO3_SNAPSHOT:
 			video3_snapshot(&msg);
+			break;
+		case MSG_DEVICE_PROPERTY_GET_ACK:
+			if(msg.arg_pass.cat == DEVICE_ACTION_MOTO_STATUS) {
+				if(msg.arg_in.dog == 1)
+					motor_ready = 1;
+			}
 			break;
 		default:
 			log_qcy(DEBUG_SERIOUS, "not processed message = %x", msg.message);
@@ -1129,7 +1165,7 @@ int video3_md_trigger_message(void)
 	int ret = 0;
 	recorder_init_t init;
 	unsigned long long int now;
-	if( config.md.cloud_report ) {
+	if( config.md.enable ) {
 		now = time_get_now_stamp();
 		if( config.md.alarm_interval < 1)
 			config.md.alarm_interval = 1;
@@ -1193,7 +1229,7 @@ int video3_spd_trigger_message(void)
 	int ret = 0;
 	unsigned long long int now;
 	recorder_init_t init;
-	if( config.spd.cloud_report ) {
+	if( config.spd.enable ) {
 		now = time_get_now_stamp();
 		if( config.spd.alarm_interval < 1)
 			config.spd.alarm_interval = 1;
@@ -1278,7 +1314,7 @@ int server_video3_message(message_t *msg)
 		return -1;
 	}
 	ret = msg_buffer_push(&message, msg);
-	log_qcy(DEBUG_VERBOSE, "push into the video3 message queue: sender=%d, message=%x, ret=%d, head=%d, tail=%d", msg->sender, msg->message, ret,
+	log_qcy(DEBUG_SERIOUS, "push into the video3 message queue: sender=%d, message=%x, ret=%d, head=%d, tail=%d", msg->sender, msg->message, ret,
 			message.head, message.tail);
 	if( ret!=0 )
 		log_qcy(DEBUG_WARNING, "message push in video3 error =%d", ret);

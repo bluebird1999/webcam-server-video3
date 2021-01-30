@@ -66,7 +66,7 @@ static rts_md_cfg mt_md_cfg;
 static rts_pd_cfg pd_cfg;
 static rts_mt_cfg mt_cfg;
 static rts_pd_res pd_res = {0};
-static unsigned int	buffer_frames;
+static unsigned int	buffer_frames = 0;
 
 //function
 
@@ -205,7 +205,7 @@ static void spd_motion_tracking(rts_point mov_dis,int *ad_bf)
 	}
 	//drop frames for stable image
 	//motr_steps * stpes_per_circle * secs_per_circle * fps
-	*ad_bf = abs(motor_x) / 170.0 * 8 * 30;
+	*ad_bf = abs(motor_x) / 4000 * 48 * 5;
 }
 
 int video3_spd_proc(video3_spd_config_t *ctrl, int channel)
@@ -215,6 +215,7 @@ int video3_spd_proc(video3_spd_config_t *ctrl, int channel)
 	struct rts_av_buffer *b = NULL;
 	static struct rts_av_buffer *last_b;
 	//***
+
 	RTS_SAFE_RELEASE(last_b, rts_av_put_buffer);
 	ret = rts_av_poll(channel);
 	if (ret < 0)
@@ -307,7 +308,7 @@ int video3_spd_init(video3_spd_config_t *ctrl, int channel)
 	md_src.src_img = src_img;
 	pd_src.src_img = src_img;
 	pd_src.md_res = pd_md_res;
-/*	if( channel != -1) {
+	if( channel != -1) {
 		ret = rts_av_start_recv(channel);
 		if (ret) {
 			log_qcy(DEBUG_SERIOUS, "start recv isp fail, ret = %d", ret);
@@ -315,16 +316,16 @@ int video3_spd_init(video3_spd_config_t *ctrl, int channel)
 			return -1;
 		}
 	}
-*/
+
 	return ret;
 }
 
 int video3_spd_release(int channel)
 {
-/*	if( channel != -1) {
+	if( channel != -1) {
 		rts_av_stop_recv(channel);
 	}
-*/
+
 	rts_release_obj(&src_img);
 	rts_release_handle(&mt_md_handle);
 	rts_release_handle(&pd_md_handle);
